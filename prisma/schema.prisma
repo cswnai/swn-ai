@@ -1,0 +1,268 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum LeadTier {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum LeadStatus {
+  NEW
+  SCORED
+  APPROVED
+  REJECTED
+  NURTURING
+  ARCHIVED
+}
+
+enum EmailDraftStatus {
+  PENDING_REVIEW
+  APPROVED
+  SENT
+  REJECTED
+}
+
+enum NurtureEmailStatus {
+  SCHEDULED
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum FieldType {
+  TEXT
+  TEXTAREA
+  EMAIL
+  PHONE
+  NUMBER
+  SELECT
+  MULTISELECT
+  RADIO
+  CHECKBOX
+  DATE
+}
+
+enum AutoSendConfig {
+  NEVER
+  ALWAYS
+  APPROVAL_REQUIRED
+}
+
+model Tenant {
+  id                  String         @id @default(cuid())
+  name                String
+  slug                String         @unique
+  slackWebhookUrl     String?
+  fromEmail           String
+  replyToEmail        String?
+  highTierThreshold   Int            @default(75)
+  mediumTierThreshold Int            @default(40)
+  highAutoSend        AutoSendConfig @default(APPROVAL_REQUIRED)
+  mediumAutoSend      AutoSendConfig @default(APPROVAL_REQUIRED)
+  lowAutoSend         AutoSendConfig @default(NEVER)
+  scoringCriteria     String         @default("")
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  users           User[]
+  formConfig      FormConfig?
+  leads           Lead[]
+  emailDrafts     EmailDraft[]
+  nurtureSequences NurtureSequence[]
+  nurtureEmails   NurtureEmail[]
+}
+
+model User {
+  id             String    @id @default(cuid())
+  tenantId       String
+  email          String    @unique
+  name           String?
+  hashedPassword String?
+  role           String    @default("admin")
+  emailVerified  DateTime?
+  createdAt      DateTime  @default(now())
+
+  tenant           Tenant       @relation(fields: [tenantId], references: [id])
+  accounts         Account[]
+  sessions         Session[]
+  approvedDrafts   EmailDraft[] @relation("ApprovedBy")
+  rejectedDrafts   EmailDraft[] @relation("RejectedBy")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model FormConfig {
+  id                String   @id @default(cuid())
+  tenantId          String   @unique
+  title             String
+  description       String?
+  submitButtonLabel String   @default("Submit")
+  thankYouMessage   String   @default("We'll be in touch soon!")
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenant Tenant      @relation(fields: [tenantId], references: [id])
+  fields FormField[]
+  leads  Lead[]
+}
+
+model FormField {
+  id            String    @id @default(cuid())
+  formConfigId  String
+  label         String
+  key           String
+  type          FieldType
+  placeholder   String?
+  isRequired    Boolean   @default(false)
+  order         Int
+  options       Json?
+  scoringWeight Float     @default(1.0)
+  scoringHint   String?
+  createdAt     DateTime  @default(now())
+
+  formConfig FormConfig @relation(fields: [formConfigId], references: [id], onDelete: Cascade)
+
+  @@unique([formConfigId, key])
+}
+
+model Lead {
+  id              String      @id @default(cuid())
+  tenantId        String
+  formConfigId    String
+  status          LeadStatus  @default(NEW)
+  tier            LeadTier?
+  score           Int?
+  scoreRationale  String?
+  rawAiResponse   String?
+  submittedAt     DateTime    @default(now())
+  scoredAt        DateTime?
+  ipAddress       String?
+  userAgent       String?
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id])
+  formConfig  FormConfig   @relation(fields: [formConfigId], references: [id])
+  answers     LeadAnswer[]
+  emailDrafts EmailDraft[]
+  nurtureEmails NurtureEmail[]
+}
+
+model LeadAnswer {
+  id         String @id @default(cuid())
+  leadId     String
+  fieldKey   String
+  fieldLabel String
+  value      String
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+}
+
+model EmailDraft {
+  id               String           @id @default(cuid())
+  leadId           String
+  tenantId         String
+  status           EmailDraftStatus @default(PENDING_REVIEW)
+  toEmail          String
+  subject          String
+  bodyHtml         String
+  bodyText         String
+  editedSubject    String?
+  editedBodyHtml   String?
+  editedBodyText   String?
+  approvedAt       DateTime?
+  approvedByUserId String?
+  sentAt           DateTime?
+  resendMessageId  String?
+  rejectedAt       DateTime?
+  rejectedByUserId String?
+  rejectionReason  String?
+  createdAt        DateTime         @default(now())
+
+  lead       Lead  @relation(fields: [leadId], references: [id])
+  tenant     Tenant @relation(fields: [tenantId], references: [id])
+  approvedBy User?  @relation("ApprovedBy", fields: [approvedByUserId], references: [id])
+  rejectedBy User?  @relation("RejectedBy", fields: [rejectedByUserId], references: [id])
+}
+
+model NurtureSequence {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  tenant Tenant         @relation(fields: [tenantId], references: [id])
+  steps  NurtureStep[]
+  emails NurtureEmail[]
+}
+
+model NurtureStep {
+  id               String @id @default(cuid())
+  sequenceId       String
+  stepNumber       Int
+  delayDays        Int
+  subjectTemplate  String
+  bodyHtmlTemplate String
+  bodyTextTemplate String
+
+  sequence NurtureSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+
+  @@unique([sequenceId, stepNumber])
+}
+
+model NurtureEmail {
+  id            String             @id @default(cuid())
+  leadId        String
+  tenantId      String
+  sequenceId    String
+  stepNumber    Int
+  status        NurtureEmailStatus @default(SCHEDULED)
+  scheduledFor  DateTime
+  sentAt        DateTime?
+  resendMessageId String?
+  failureReason String?
+
+  lead     Lead            @relation(fields: [leadId], references: [id])
+  tenant   Tenant          @relation(fields: [tenantId], references: [id])
+  sequence NurtureSequence @relation(fields: [sequenceId], references: [id])
+}
